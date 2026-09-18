@@ -1,0 +1,346 @@
+---
+title: "FM Housing Price Prediction Project"
+author: "Divine Gatebuka Iradukunda"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ranger)
+library(vetiver)
+```
+
+# Project Overview
+
+This project uses Fargo-Moorhead housing data to develop a model that predicts 
+the sold price of residential properties. The project includes data preparation, 
+exploratory analysis, predictive modeling, model evaluation, and deployment 
+through a Vetiver API and Shiny application.
+
+## Data
+
+The housing data for this project was provided through the DATA 470 course 
+repository by Dr Gregory Tanner.
+
+```{r load-data}
+housing <- read_csv("FM_Housing_2018_2022_clean.csv")
+glimpse(housing)
+```
+
+## Exploratory Data Analysis
+
+Before building the predictive model, I examined the structure of the housing 
+data and the distribution of the target variable, Sold Price.
+
+```{r data-summary}
+summary(housing$`Sold Price`)
+```
+
+
+```{r missing-values}
+housing |>
+  summarise(
+    across(
+      everything(),
+      ~ sum(is.na(.))
+    )
+  ) |>
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "missing"
+  ) |>
+  arrange(desc(missing))
+```
+
+
+```{r sold-price-distribution}
+ggplot(housing, aes(x = `Sold Price`)) +
+  geom_histogram(bins = 50) +
+  labs(
+    title = "Distribution of Sold Prices",
+    x = "Sold Price",
+    y = "Number of Properties"
+  )
+```
+
+
+## Interpretation
+
+The distribution of Sold Price is right-skewed, with most properties selling at 
+lower prices and a smaller number of properties selling for much higher prices. 
+The long right tail shows that there are some high-priced properties in the dataset, 
+with the maximum sold price being much higher than the typical property price.
+
+This suggests that the model may need to account for the skewed distribution of 
+housing prices when making predictions.
+
+## Data Preparation
+
+Before building the predictive model, I selected variables that could reasonably 
+be used to predict a property's sold price. I excluded variables that would reveal 
+information about the sale.
+
+
+```{r select-variables}
+model_data <- housing |>
+  select(
+    `Sold Price`,
+    `List Price`,
+    `Original List Price`,
+    `Total SqFt.`,
+    `Year Built`,
+    `Total Bedrooms`,
+    `Total Bathrooms`,
+    `Garage Stalls`,
+    `Lot Size SqFt`,
+    `Above Grade Finished Area`,
+    `Below Grade Finished Area`,
+    `Above Grade Unfinished Area`,
+    `Below Grade Unfinished Area`,
+    `Property Type`,
+    `Style`,
+    `City`,
+    `County`,
+    `Garage Type`
+  ) |>
+  rename(
+    sold_price = `Sold Price`,
+    list_price = `List Price`,
+    original_list_price = `Original List Price`,
+    total_sqft = `Total SqFt.`,
+    year_built = `Year Built`,
+    total_bedrooms = `Total Bedrooms`,
+    total_bathrooms = `Total Bathrooms`,
+    garage_stalls = `Garage Stalls`,
+    lot_size_sqft = `Lot Size SqFt`,
+    above_grade_finished = `Above Grade Finished Area`,
+    below_grade_finished = `Below Grade Finished Area`,
+    above_grade_unfinished = `Above Grade Unfinished Area`,
+    below_grade_unfinished = `Below Grade Unfinished Area`,
+    property_type = `Property Type`,
+    style = Style,
+    city = City,
+    county = County,
+    garage_type = `Garage Type`
+  )
+
+glimpse(model_data)
+```
+
+
+### Why these?
+
+We're keeping a mix of:
+
+**Property characteristics**
+- Total square footage
+- Year built
+- Bedrooms
+- Bathrooms
+- Garage
+- Lot size
+- Finished/unfinished areas
+
+**Location**
+- City
+- County
+- Property type
+- Style
+
+**Listing information**
+- List Price
+- Original List Price
+
+This gives the model information that could reasonably be available when the 
+property is being listed.
+
+I excluded `Sold Price Per/SqFt` because it is calculated using the sold price 
+and would cause target leakage. I also excluded variables such as `Sold Date` 
+and `Days on Market` because they describe information that becomes available 
+during or after the selling process rather than at the time of listing. 
+
+
+## Training/Testing Data
+```{r train-test-split}
+set.seed(123)
+
+train_index <- sample(
+  seq_len(nrow(model_data)),
+  size = 0.8 * nrow(model_data)
+)
+
+train_data <- model_data[train_index, ]
+test_data <- model_data[-train_index, ]
+
+nrow(train_data)
+nrow(test_data)
+```
+
+
+I split the prepared data into training and testing sets, using 80% of the observations 
+for model training and 20% for evaluating model performance/testing. A random seed was 
+used so that the same split can be reproduced.
+
+
+## Model Development
+
+I used a Random Forest regression model to predict the sold price of properties. 
+Random Forest was selected because it can capture nonlinear relationships between
+housing characteristics and sold price while working with both numeric and categorical variables.
+
+```{r random-forest}
+set.seed(123)
+model_data <- housing |>
+  select(
+    `Sold Price`,
+    `List Price`,
+    `Original List Price`,
+    `Total SqFt.`,
+    `Year Built`,
+    `Total Bedrooms`,
+    `Total Bathrooms`,
+    `Garage Stalls`,
+    `Lot Size SqFt`,
+    `Above Grade Finished Area`,
+    `Below Grade Finished Area`,
+    `Above Grade Unfinished Area`,
+    `Below Grade Unfinished Area`,
+    `Property Type`,
+    `Style`,
+    `City`,
+    `County`,
+    `Garage Type`
+  ) |>
+  rename(
+    sold_price = `Sold Price`,
+    list_price = `List Price`,
+    original_list_price = `Original List Price`,
+    total_sqft = `Total SqFt.`,
+    year_built = `Year Built`,
+    total_bedrooms = `Total Bedrooms`,
+    total_bathrooms = `Total Bathrooms`,
+    garage_stalls = `Garage Stalls`,
+    lot_size_sqft = `Lot Size SqFt`,
+    above_grade_finished = `Above Grade Finished Area`,
+    below_grade_finished = `Below Grade Finished Area`,
+    above_grade_unfinished = `Above Grade Unfinished Area`,
+    below_grade_unfinished = `Below Grade Unfinished Area`,
+    property_type = `Property Type`,
+    style = Style,
+    city = City,
+    county = County,
+    garage_type = `Garage Type`
+  )
+
+glimpse(model_data)
+
+# Random Forest Model
+rf_model <- ranger(
+  sold_price ~ .,
+  data = train_data,
+  num.trees = 500,
+  importance = "impurity"
+)
+
+rf_model
+```
+
+## Model Evaluation
+
+After training the Random Forest model, I evaluated its predictions using the testing 
+dataset, which was not used during model training. 
+
+```{r model-predictions}
+predictions <- predict(
+  rf_model,
+  data = test_data
+)$predictions
+
+head(predictions)
+
+
+actual <- test_data$sold_price
+predicted <- predictions
+
+rmse <- sqrt(mean((actual - predicted)^2))
+
+mae <- mean(abs(actual - predicted))
+
+r_squared <- 1 - sum((actual - predicted)^2) /
+  sum((actual - mean(actual))^2)
+
+model_performance <- tibble(
+  Metric = c("RMSE", "MAE", "R-squared"),
+  Value = c(rmse, mae, r_squared)
+)
+
+model_performance
+```
+
+### Interpretation
+
+The Random Forest model performed well on the testing data, with an R-squared value of 0.934. 
+This means that the model explains approximately 93.4% of the variation in sold prices for 
+the properties in the testing set. 
+
+The model had a mean absolute error (MAE) of approximately $8,126, meaning the average absolute 
+difference between the predicted and actual sold prices was about $8,126. 
+
+The RMSE was approximately $35,380. This means the model's prediction errors were around 
+$35,380 on average, with larger errors having a bigger effect on the RMSE.
+
+Overall, the results indicate that the model was able to predict sold prices reasonably well
+on properties it had not been trained on.
+
+### Visualization
+
+```{r actual-vs-predicted}
+prediction_results <- test_data |>
+  select(sold_price) |>
+  mutate(
+    predicted_price = predictions
+  )
+
+ggplot(prediction_results, aes(x = sold_price, y = predicted_price)) +
+  geom_point(alpha = 0.4) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed"
+  ) +
+  labs(
+    title = "Actual vs. Predicted Sold Prices",
+    x = "Actual Sold Price",
+    y = "Predicted Sold Price"
+  )
+```
+### Interpretation
+
+Overall, the model's predictions were fairly close to the actual prices for most homes, 
+especially those selling below $1 million. However, the model had larger errors for some 
+of the most expensive homes and underestimated their prices. 
+
+For example, one property sold for over $3 million, while the model predicted a price below 
+$1.5 million.
+
+### Vetiver Model
+
+```{r vetiver-model}
+v <- vetiver_model(
+  rf_model,
+  model_name = "fm-housing-price-model",
+  prototype_data = train_data |>
+    select(-sold_price) |>
+    slice(1)
+)
+
+v
+```
+```{r save-vetiver-model}
+saveRDS(v, "fm-housing-vetiver.rds")
+```
+
+
