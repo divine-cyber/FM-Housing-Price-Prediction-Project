@@ -1,7 +1,7 @@
 library(vetiver)
 library(plumber)
 
-v <- readRDS("C:/Users/divin/OneDrive/Desktop/FM - Housing Prediction Project/fm-housing-vetiver.rds")
+v <- readRDS("fm-housing-vetiver.rds")
 
 pr() |>
   vetiver_api(v) |>
